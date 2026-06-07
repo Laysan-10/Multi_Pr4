@@ -1,5 +1,6 @@
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
+using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -11,6 +12,9 @@ public class PlayerVehicleInteraction : NetworkBehaviour
     [SerializeField] private PlayerMovement playerMovement;
     [SerializeField] private PlayerShooting playerShooting;
     [SerializeField] private PlayerCamera playerCamera;
+    [SerializeField] private TMP_Text enterVehiclePrompt;
+    [SerializeField] private string enterPromptText = "Нажмите E, чтобы сесть в машину";
+    [SerializeField] private string exitPromptText = "Нажмите E, чтобы выйти из машины";
 
     public readonly SyncVar<NetworkObject> OccupiedVehicle = new(null, new());
 
@@ -37,6 +41,9 @@ public class PlayerVehicleInteraction : NetworkBehaviour
         base.OnStartNetwork();
         OccupiedVehicle.OnChange += OnOccupiedVehicleChanged;
         ApplyInVehicleState(OccupiedVehicle.Value);
+
+        if (Owner.IsLocalClient && enterVehiclePrompt)
+            enterVehiclePrompt.gameObject.SetActive(false);
     }
 
     public override void OnStopNetwork()
@@ -50,6 +57,8 @@ public class PlayerVehicleInteraction : NetworkBehaviour
         if (!IsOwner || !IsSpawned)
             return;
 
+        UpdateEnterPrompt();
+
         if (Keyboard.current == null || !Keyboard.current.eKey.wasPressedThisFrame)
             return;
 
@@ -59,7 +68,25 @@ public class PlayerVehicleInteraction : NetworkBehaviour
             TryEnterNearestVehicle();
     }
 
-    private void TryEnterNearestVehicle()
+    private void UpdateEnterPrompt()
+    {
+        if (!enterVehiclePrompt)
+            return;
+
+        if (IsInVehicle)
+        {
+            enterVehiclePrompt.gameObject.SetActive(true);
+            enterVehiclePrompt.text = exitPromptText;
+            return;
+        }
+
+        bool nearVehicle = FindNearestEnterableVehicle() != null;
+        enterVehiclePrompt.gameObject.SetActive(nearVehicle);
+        if (nearVehicle)
+            enterVehiclePrompt.text = enterPromptText;
+    }
+
+    private NetworkVehicle FindNearestEnterableVehicle()
     {
         NetworkVehicle[] vehicles = FindObjectsByType<NetworkVehicle>(FindObjectsSortMode.None);
         NetworkVehicle nearest = null;
@@ -67,7 +94,7 @@ public class PlayerVehicleInteraction : NetworkBehaviour
 
         foreach (NetworkVehicle vehicle in vehicles)
         {
-            if (vehicle.HasDriver)
+            if (!vehicle.CanBeEnteredBy(NetworkObject))
                 continue;
 
             float distance = Vector3.Distance(transform.position, vehicle.transform.position);
@@ -78,6 +105,12 @@ public class PlayerVehicleInteraction : NetworkBehaviour
             nearest = vehicle;
         }
 
+        return nearest;
+    }
+
+    private void TryEnterNearestVehicle()
+    {
+        NetworkVehicle nearest = FindNearestEnterableVehicle();
         if (nearest)
             nearest.RequestEnterServerRpc(NetworkObject);
     }
