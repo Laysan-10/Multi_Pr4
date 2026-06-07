@@ -18,6 +18,7 @@ GameObject:
   - component: {fileID: -7613383704162103097}
   - component: {fileID: -4680069288730073533}
   - component: {fileID: 2042257670551743093}
+  - component: {fileID: -9182736450123456789}
   - component: {fileID: 2677000673138560865}
   m_Layer: 3
   m_Name: PlayerPrefab 2
@@ -221,7 +222,8 @@ MonoBehaviour:
   _componentIndexCache: 3
   _addedNetworkObject: {fileID: 2677000673138560865}
   _networkObjectCache: {fileID: 2677000673138560865}
-  offset: {x: 0, y: 2, z: -4}
+  playerOffset: {x: 0, y: 2, z: -4}
+  vehicleOffset: {x: 0, y: 4, z: -8}
 --- !u!114 &2042257670551743093
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -241,6 +243,27 @@ MonoBehaviour:
   firePoint: {fileID: 3054042320649548914}
   cooldown: 0.4
   MaxAmmo: 10
+--- !u!114 &-9182736450123456789
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1043019404962984236}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e6d5c4b3a291807162534039485a6b5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PlayerVehicleInteraction
+  _componentIndexCache: 5
+  _addedNetworkObject: {fileID: 2677000673138560865}
+  _networkObjectCache: {fileID: 2677000673138560865}
+  enterDistance: 4
+  playerMeshRenderer: {fileID: 138561275143220699}
+  playerCollider: {fileID: 4043066162254449599}
+  playerMovement: {fileID: -7613383704162103097}
+  playerShooting: {fileID: 2042257670551743093}
+  playerCamera: {fileID: -4680069288730073533}
 --- !u!114 &2677000673138560865
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -265,6 +288,7 @@ MonoBehaviour:
   - {fileID: -7613383704162103097}
   - {fileID: -4680069288730073533}
   - {fileID: 2042257670551743093}
+  - {fileID: -9182736450123456789}
   InitializedParentNetworkBehaviour: {fileID: 0}
   InitializedNestedNetworkObjects: []
   RuntimeParentNetworkBehaviour: {fileID: 0}
