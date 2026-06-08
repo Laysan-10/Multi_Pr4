@@ -144,6 +144,8 @@ public class PrometeoCarController : MonoBehaviour
       float localVelocityX;
       bool deceleratingCar;
       bool touchControlsSetup = false;
+      float speedBoostMultiplier = 1f;
+      float speedBoostUntil;
       /*
       The following variables are used to store information about sideways friction of the wheels (such as
       extremumSlip,extremumValue, asymptoteSlip, asymptoteValue and stiffness). We change this values to
@@ -260,6 +262,23 @@ public class PrometeoCarController : MonoBehaviour
           }
         }
 
+    }
+
+    public void ApplySpeedBoost(float duration, float multiplier)
+    {
+      speedBoostMultiplier = Mathf.Max(1f, multiplier);
+      speedBoostUntil = Time.time + duration;
+    }
+
+    float GetActiveSpeedMultiplier()
+    {
+      if (Time.time > speedBoostUntil)
+      {
+        speedBoostMultiplier = 1f;
+        return 1f;
+      }
+
+      return speedBoostMultiplier;
     }
 
     // Update is called once per frame
@@ -517,16 +536,18 @@ public class PrometeoCarController : MonoBehaviour
       if(localVelocityZ < -1f){
         Brakes();
       }else{
-        if(Mathf.RoundToInt(carSpeed) < maxSpeed){
+        int boostedMaxSpeed = Mathf.RoundToInt(maxSpeed * GetActiveSpeedMultiplier());
+        if(Mathf.RoundToInt(carSpeed) < boostedMaxSpeed){
           //Apply positive torque in all wheels to go forward if maxSpeed has not been reached.
+          float torque = (accelerationMultiplier * 50f) * throttleAxis * GetActiveSpeedMultiplier();
           frontLeftCollider.brakeTorque = 0;
-          frontLeftCollider.motorTorque = (accelerationMultiplier * 50f) * throttleAxis;
+          frontLeftCollider.motorTorque = torque;
           frontRightCollider.brakeTorque = 0;
-          frontRightCollider.motorTorque = (accelerationMultiplier * 50f) * throttleAxis;
+          frontRightCollider.motorTorque = torque;
           rearLeftCollider.brakeTorque = 0;
-          rearLeftCollider.motorTorque = (accelerationMultiplier * 50f) * throttleAxis;
+          rearLeftCollider.motorTorque = torque;
           rearRightCollider.brakeTorque = 0;
-          rearRightCollider.motorTorque = (accelerationMultiplier * 50f) * throttleAxis;
+          rearRightCollider.motorTorque = torque;
         }else {
           // If the maxSpeed has been reached, then stop applying torque to the wheels.
           // IMPORTANT: The maxSpeed variable should be considered as an approximation; the speed of the car

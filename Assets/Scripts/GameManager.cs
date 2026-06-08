@@ -4,7 +4,6 @@ using FishNet.Object;
 using FishNet.Object.Synchronizing;
 using FishNet.Transporting;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 [RequireComponent(typeof(NetworkObject))]
 public class GameManager : NetworkBehaviour
@@ -12,11 +11,10 @@ public class GameManager : NetworkBehaviour
     public static GameManager Instance { get; private set; }
 
     public static bool IsMatchInProgress =>
-        !Instance || Instance.CurrentState.Value == GameState.InProgress;
+        Instance && Instance.CurrentState.Value == GameState.InProgress;
 
     [SerializeField] private int requiredPlayers = 2;
-    [SerializeField] private float matchDurationSeconds = 60f;
-    [SerializeField] private float resultsScreenSeconds = 5f;
+    [SerializeField] private float countdownSeconds = 3f;
 
     public int RequiredPlayersForUi => requiredPlayers;
 
@@ -25,16 +23,17 @@ public class GameManager : NetworkBehaviour
 
     public readonly SyncVar<int> ConnectedPlayers = new(0, new SyncTypeSettings(0.25f));
 
-    public readonly SyncVar<float> MatchTimer = new(60f, new SyncTypeSettings(0.25f));
+    public readonly SyncVar<float> CountdownTimer = new(0f, new SyncTypeSettings(0.1f));
 
-    private Coroutine _resetLobbyCoroutine;
+    private Coroutine _countdownCoroutine;
     private float _recountCooldown;
 
     public enum GameState
     {
         WaitingForPlayers,
-        InProgress,
-        ShowingResults
+        WaitingForDrivers,
+        Countdown,
+        InProgress
     }
 
     public override void OnStartNetwork()
@@ -45,7 +44,8 @@ public class GameManager : NetworkBehaviour
 
     public override void OnStopNetwork()
     {
-        if (Instance == this) Instance = null;
+        if (Instance == this)
+            Instance = null;
 
         base.OnStopNetwork();
     }
@@ -58,7 +58,7 @@ public class GameManager : NetworkBehaviour
         NetworkManager.ClientManager.OnClientConnectionState += OnLocalClientConnectionState;
 
         RecountConnectedPlayers();
-        TryStartMatchIfReady();
+        TryAdvanceFromLobby();
     }
 
     public override void OnStopServer()
@@ -67,10 +67,10 @@ public class GameManager : NetworkBehaviour
         ServerManager.OnAuthenticationResult -= OnAuthenticationResult;
         NetworkManager.ClientManager.OnClientConnectionState -= OnLocalClientConnectionState;
 
-        if (_resetLobbyCoroutine != null)
+        if (_countdownCoroutine != null)
         {
-            StopCoroutine(_resetLobbyCoroutine);
-            _resetLobbyCoroutine = null;
+            StopCoroutine(_countdownCoroutine);
+            _countdownCoroutine = null;
         }
 
         base.OnStopServer();
@@ -78,59 +78,44 @@ public class GameManager : NetworkBehaviour
 
     private void OnDestroy()
     {
-        if (Instance == this) Instance = null;
+        if (Instance == this)
+            Instance = null;
     }
 
     private void OnRemoteConnectionState(NetworkConnection conn, RemoteConnectionStateArgs args)
     {
-        if (!IsServerInitialized) return;
+        if (!IsServerInitialized)
+            return;
 
         RecountConnectedPlayers();
-        TryStartMatchIfReady();
+        TryAdvanceFromLobby();
+        EvaluateDriverReadiness();
     }
 
     private void OnLocalClientConnectionState(ClientConnectionStateArgs args)
     {
-        if (!IsServerInitialized) return;
+        if (!IsServerInitialized)
+            return;
 
         RecountConnectedPlayers();
-        TryStartMatchIfReady();
+        TryAdvanceFromLobby();
+        EvaluateDriverReadiness();
     }
 
     private void OnAuthenticationResult(NetworkConnection conn, bool authenticated)
     {
-        if (!IsServerInitialized) return;
+        if (!IsServerInitialized)
+            return;
 
         RecountConnectedPlayers();
-        TryStartMatchIfReady();
-    }
-
-    private void RecountConnectedPlayers()
-    {
-        int count = ServerManager.Clients.Count;
-        if (NetworkManager.IsHostStarted) count++;
-
-        ConnectedPlayers.Value = count;
-    }
-
-    private void TryStartMatchIfReady()
-    {
-        if (CurrentState.Value != GameState.WaitingForPlayers) return;
-
-        if (ConnectedPlayers.Value < requiredPlayers) return;
-
-        StartMatch();
-    }
-
-    private void StartMatch()
-    {
-        MatchTimer.Value = matchDurationSeconds;
-        CurrentState.Value = GameState.InProgress;
+        TryAdvanceFromLobby();
+        EvaluateDriverReadiness();
     }
 
     private void Update()
     {
-        if (!IsServerInitialized) return;
+        if (!IsServerInitialized)
+            return;
 
         if (CurrentState.Value == GameState.WaitingForPlayers)
         {
@@ -141,56 +126,114 @@ public class GameManager : NetworkBehaviour
                 RecountConnectedPlayers();
             }
         }
-
-        if (CurrentState.Value != GameState.InProgress) return;
-
-        MatchTimer.Value -= Time.deltaTime;
-
-        if (MatchTimer.Value <= 0f) EndMatch();
     }
 
-    private void EndMatch()
+    public void NotifyDriverStateChanged()
     {
-        if (CurrentState.Value != GameState.InProgress) return;
+        if (!IsServerInitialized)
+            return;
 
-        CurrentState.Value = GameState.ShowingResults;
-
-        if (_resetLobbyCoroutine != null) StopCoroutine(_resetLobbyCoroutine);
-
-        _resetLobbyCoroutine = StartCoroutine(ResetToLobbyAfterDelay());
+        EvaluateDriverReadiness();
     }
 
-    private IEnumerator ResetToLobbyAfterDelay()
+    private void RecountConnectedPlayers()
     {
-        yield return new WaitForSeconds(resultsScreenSeconds);
-        _resetLobbyCoroutine = null;
-        ResetToLobby();
+        int count = ServerManager.Clients.Count;
+        if (NetworkManager.IsHostStarted)
+            count++;
+
+        ConnectedPlayers.Value = count;
     }
 
-    private void ResetToLobby()
+    private void TryAdvanceFromLobby()
     {
-        foreach (NetworkConnection conn in ServerManager.Clients.Values) ResetPlayersForConnection(conn);
+        if (CurrentState.Value != GameState.WaitingForPlayers)
+            return;
 
-        if (NetworkManager.IsHostStarted && NetworkManager.ClientManager.Connection.IsValid) ResetPlayersForConnection(NetworkManager.ClientManager.Connection);
+        if (ConnectedPlayers.Value < requiredPlayers)
+            return;
 
-        MatchTimer.Value = matchDurationSeconds;
-        CurrentState.Value = GameState.WaitingForPlayers;
-
-        TryStartMatchIfReady();
+        CurrentState.Value = GameState.WaitingForDrivers;
     }
 
-    private static void ResetPlayersForConnection(NetworkConnection conn)
+    private void EvaluateDriverReadiness()
     {
-        foreach (NetworkObject nob in conn.Objects)
+        if (CurrentState.Value == GameState.InProgress)
+            return;
+
+        if (ConnectedPlayers.Value < requiredPlayers)
         {
-            if (!nob.TryGetComponent(out PlayerNetwork pn)) continue;
-
-            pn.Hp.Value = 100;
-            pn.IsAlive.Value = true;
-            pn.Score.Value = 0;
-            pn.RespawnPlayer();
-
-            if (nob.TryGetComponent(out PlayerShooting shooting)) shooting.CurrentAmmo.Value = shooting.MaxAmmo;
+            CancelCountdown();
+            CurrentState.Value = GameState.WaitingForPlayers;
+            return;
         }
+
+        if (CountPlayersInVehicles() < requiredPlayers)
+        {
+            CancelCountdown();
+            if (CurrentState.Value == GameState.Countdown)
+                CurrentState.Value = GameState.WaitingForDrivers;
+            return;
+        }
+
+        if (CurrentState.Value == GameState.WaitingForDrivers)
+            BeginCountdown();
+    }
+
+    private int CountPlayersInVehicles()
+    {
+        int count = 0;
+        PlayerVehicleInteraction[] interactions =
+            FindObjectsByType<PlayerVehicleInteraction>(FindObjectsSortMode.None);
+
+        foreach (PlayerVehicleInteraction interaction in interactions)
+        {
+            if (interaction.IsInVehicle)
+                count++;
+        }
+
+        return count;
+    }
+
+    private void BeginCountdown()
+    {
+        if (_countdownCoroutine != null)
+            return;
+
+        CurrentState.Value = GameState.Countdown;
+        _countdownCoroutine = StartCoroutine(CountdownRoutine());
+    }
+
+    private void CancelCountdown()
+    {
+        if (_countdownCoroutine == null)
+            return;
+
+        StopCoroutine(_countdownCoroutine);
+        _countdownCoroutine = null;
+        CountdownTimer.Value = 0f;
+    }
+
+    private IEnumerator CountdownRoutine()
+    {
+        float remaining = countdownSeconds;
+        while (remaining > 0f)
+        {
+            CountdownTimer.Value = remaining;
+            yield return null;
+            remaining -= Time.deltaTime;
+        }
+
+        CountdownTimer.Value = 0f;
+        _countdownCoroutine = null;
+        CurrentState.Value = GameState.InProgress;
+        RefreshAllVehicleInputs();
+    }
+
+    private static void RefreshAllVehicleInputs()
+    {
+        NetworkVehicle[] vehicles = FindObjectsByType<NetworkVehicle>(FindObjectsSortMode.None);
+        foreach (NetworkVehicle vehicle in vehicles)
+            vehicle.RefreshDriverState();
     }
 }

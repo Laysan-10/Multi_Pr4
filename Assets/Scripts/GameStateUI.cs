@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using System.Text;
 using TMPro;
 using UnityEngine;
 
@@ -8,44 +6,58 @@ public class GameStateUI : MonoBehaviour
     [SerializeField] private GameManager gameManager;
     [SerializeField] private GameObject waitingRoot;
     [SerializeField] private GameObject resultsRoot;
+    [SerializeField] private GameObject matchTimerRoot;
+    [SerializeField] private GameObject countdownRoot;
     [SerializeField] private TMP_Text waitingText;
-    [SerializeField] private TMP_Text matchTimerText;
-    [SerializeField] private TMP_Text resultsText;
+    [SerializeField] private TMP_Text countdownText;
 
     private bool _bound;
+    private bool _hideLobbyUi;
 
     private void Start()
     {
-        if (!gameManager) gameManager = GameManager.Instance;
+        if (!gameManager)
+            gameManager = GameManager.Instance;
 
-        if (!gameManager) gameManager = FindFirstObjectByType<GameManager>();
+        if (!gameManager)
+            gameManager = FindFirstObjectByType<GameManager>();
 
+        ConnectionUI.OnConnected += HandleConnected;
         Bind();
         RefreshAll();
     }
 
     private void OnDestroy()
     {
+        ConnectionUI.OnConnected -= HandleConnected;
         Unbind();
+    }
+
+    private void HandleConnected()
+    {
+        _hideLobbyUi = true;
+        RefreshAll();
     }
 
     private void Bind()
     {
-        if (_bound || !gameManager) return;
+        if (_bound || !gameManager)
+            return;
 
         gameManager.CurrentState.OnChange += OnStateChanged;
         gameManager.ConnectedPlayers.OnChange += OnConnectedPlayersChanged;
-        gameManager.MatchTimer.OnChange += OnMatchTimerChanged;
+        gameManager.CountdownTimer.OnChange += OnCountdownChanged;
         _bound = true;
     }
 
     private void Unbind()
     {
-        if (!_bound || !gameManager) return;
+        if (!_bound || !gameManager)
+            return;
 
         gameManager.CurrentState.OnChange -= OnStateChanged;
         gameManager.ConnectedPlayers.OnChange -= OnConnectedPlayersChanged;
-        gameManager.MatchTimer.OnChange -= OnMatchTimerChanged;
+        gameManager.CountdownTimer.OnChange -= OnCountdownChanged;
         _bound = false;
     }
 
@@ -56,57 +68,67 @@ public class GameStateUI : MonoBehaviour
 
     private void OnConnectedPlayersChanged(int prev, int next, bool asServer)
     {
-        RefreshWaitingOrTimer();
+        RefreshLobbyText();
     }
 
-    private void OnMatchTimerChanged(float prev, float next, bool asServer)
+    private void OnCountdownChanged(float prev, float next, bool asServer)
     {
-        RefreshWaitingOrTimer();
+        RefreshCountdown();
     }
 
     private void RefreshAll()
     {
-        if (!gameManager) return;
-
-        GameManager.GameState state = gameManager.CurrentState.Value;
-
-        if (waitingRoot) waitingRoot.SetActive(state == GameManager.GameState.WaitingForPlayers);
-        if (resultsRoot) resultsRoot.SetActive(state == GameManager.GameState.ShowingResults);
-
-        RefreshWaitingOrTimer();
-
-        if (state == GameManager.GameState.ShowingResults) RefreshResultsText();
-    }
-
-    private void RefreshWaitingOrTimer()
-    {
         if (!gameManager)
             return;
 
-        if (waitingText)
-        {
-            waitingText.text = $"Ожидание игроков: {gameManager.ConnectedPlayers.Value}/{gameManager.RequiredPlayersForUi}";
-        }
+        bool showLobby = !_hideLobbyUi;
+        GameManager.GameState state = gameManager.CurrentState.Value;
 
-        if (matchTimerText)
+        if (waitingRoot)
+            waitingRoot.SetActive(showLobby && state != GameManager.GameState.Countdown);
+
+        if (resultsRoot)
+            resultsRoot.SetActive(false);
+
+        if (matchTimerRoot)
+            matchTimerRoot.SetActive(false);
+
+        if (countdownRoot)
+            countdownRoot.SetActive(state == GameManager.GameState.Countdown);
+
+        RefreshLobbyText();
+        RefreshCountdown();
+    }
+
+    private void RefreshLobbyText()
+    {
+        if (!waitingText || !gameManager || _hideLobbyUi)
+            return;
+
+        GameManager.GameState state = gameManager.CurrentState.Value;
+        if (state == GameManager.GameState.WaitingForPlayers)
         {
-            bool show = gameManager.CurrentState.Value == GameManager.GameState.InProgress;
-            matchTimerText.gameObject.SetActive(show);
-            if (show) matchTimerText.text = $"Матч: {Mathf.Max(0f, gameManager.MatchTimer.Value):F1} с";
+            waitingText.text =
+                $"Ожидание игроков: {gameManager.ConnectedPlayers.Value}/{gameManager.RequiredPlayersForUi}";
+        }
+        else if (state == GameManager.GameState.WaitingForDrivers)
+        {
+            waitingText.text = "Садитесь в машины";
         }
     }
 
-    private void RefreshResultsText()
+    private void RefreshCountdown()
     {
-        if (!resultsText) return;
+        if (!countdownText || !gameManager)
+            return;
 
-        var list = new List<PlayerNetwork>(FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None));
-        list.Sort((a, b) => b.Score.Value.CompareTo(a.Score.Value));
+        if (gameManager.CurrentState.Value != GameManager.GameState.Countdown)
+        {
+            countdownText.text = string.Empty;
+            return;
+        }
 
-        var sb = new StringBuilder();
-        sb.AppendLine("Результаты");
-        foreach (PlayerNetwork pn in list) sb.AppendLine($"{pn.Nickname.Value}: {pn.Score.Value} попаданий");
-
-        resultsText.text = sb.ToString();
+        int seconds = Mathf.CeilToInt(Mathf.Max(0f, gameManager.CountdownTimer.Value));
+        countdownText.text = seconds > 0 ? seconds.ToString() : "Старт!";
     }
 }

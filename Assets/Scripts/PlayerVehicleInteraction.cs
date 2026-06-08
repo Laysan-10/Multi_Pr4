@@ -75,8 +75,10 @@ public class PlayerVehicleInteraction : NetworkBehaviour
 
         if (IsInVehicle)
         {
-            enterVehiclePrompt.gameObject.SetActive(true);
-            enterVehiclePrompt.text = exitPromptText;
+            bool canExitBeforeRace = !GameManager.IsMatchInProgress;
+            enterVehiclePrompt.gameObject.SetActive(canExitBeforeRace);
+            if (canExitBeforeRace)
+                enterVehiclePrompt.text = exitPromptText;
             return;
         }
 

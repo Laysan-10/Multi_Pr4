@@ -40,12 +40,17 @@ public class NetworkVehicle : NetworkBehaviour
         ApplyDriverState();
     }
 
+    public void RefreshDriverState()
+    {
+        ApplyDriverState();
+    }
+
     private void ApplyDriverState()
     {
         if (!_carController)
             return;
 
-        bool allowInput = HasDriver && IsOwner;
+        bool allowInput = HasDriver && IsOwner && GameManager.IsMatchInProgress;
         _carController.enabled = allowInput;
     }
 
@@ -74,6 +79,7 @@ public class NetworkVehicle : NetworkBehaviour
         GiveOwnership(playerNob.Owner);
 
         interaction.EnterVehicle(this);
+        GameManager.Instance?.NotifyDriverStateChanged();
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -94,6 +100,7 @@ public class NetworkVehicle : NetworkBehaviour
         interaction.ExitVehicle(exitPosition);
         DriverOwnerId.Value = -1;
         RemoveOwnership();
+        GameManager.Instance?.NotifyDriverStateChanged();
     }
 
     public void ForceReleaseDriver()

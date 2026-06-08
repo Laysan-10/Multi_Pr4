@@ -1,4 +1,4 @@
-%YAML 1.1
+﻿%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!29 &1
 OcclusionCullingSettings:
@@ -6391,8 +6391,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -813, y: -732}
-  m_SizeDelta: {x: 200, y: 50}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 400, y: 200}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &113687707
 MonoBehaviour:
@@ -6408,7 +6408,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
   m_Material: {fileID: 0}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
-  m_RaycastTarget: 1
+  m_RaycastTarget: 0
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
   m_OnCullStateChanged:
@@ -26784,13 +26784,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 22b89f7594019cf439da0220c5f428df, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PickupManager
-  healthPickupPrefab: {fileID: 8806630583675749148, guid: 5099fbc54f842c44a95eb48c57de130b,
+  boostPickupPrefab: {fileID: 7711223344556677880, guid: e5f6a7b8c9d04e1f234567890abcdef0,
     type: 3}
-  spawnPoints:
-  - {fileID: 1935926482}
-  - {fileID: 1671621424}
-  - {fileID: 2063616340}
-  respawnDelay: 10
+  spawnPoints: []
+  generatedSpawnCount: 8
+  respawnDelay: 12
+  minSpawnSeparation: 8
 --- !u!1 &475002418
 GameObject:
   m_ObjectHideFlags: 0
@@ -133208,9 +133207,10 @@ MonoBehaviour:
   gameManager: {fileID: 1732901215}
   waitingRoot: {fileID: 1694336508}
   resultsRoot: {fileID: 2143769688}
+  matchTimerRoot: {fileID: 113687705}
+  countdownRoot: {fileID: 113687705}
   waitingText: {fileID: 1475135982}
-  matchTimerText: {fileID: 113687707}
-  resultsText: {fileID: 1030464783}
+  countdownText: {fileID: 113687707}
 --- !u!114 &6233303577766930933
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -133227,6 +133227,9 @@ MonoBehaviour:
   startHostButton: {fileID: 8170258115693671688}
   startClientButton: {fileID: 5153234909477432600}
   nicknameInputField: {fileID: 1029403544}
+  hideOnConnect:
+  - {fileID: 2197998666668578669}
+  - {fileID: 1029403542}
 --- !u!114 &6283809224230019567
 MonoBehaviour:
   m_ObjectHideFlags: 0
