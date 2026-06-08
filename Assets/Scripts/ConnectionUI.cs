@@ -9,10 +9,7 @@ using UnityEngine.UI;
 public class ConnectionUI : MonoBehaviour
 {
     [SerializeField] private NetworkManager networkManager;
-    [SerializeField] private Button startHostButton;
-    [SerializeField] private Button startClientButton;
-    [SerializeField] private TMP_InputField nicknameInputField;
-    [SerializeField] private GameObject[] hideOnConnect;
+    [SerializeField] private GameObject loginPanelRoot;
 
     public static event Action<string> OnNameChanged;
     public static event Action OnConnected;
@@ -20,21 +17,35 @@ public class ConnectionUI : MonoBehaviour
     public static string PlayerNickname { get; private set; } = "Player";
     public static bool HasConnected { get; private set; }
 
+    private Button _startHostButton;
+    private Button _startClientButton;
+    private TMP_InputField _nicknameInputField;
     private bool _connectionUiHidden;
+
+    private void Awake()
+    {
+        HasConnected = false;
+        _connectionUiHidden = false;
+
+        if (loginPanelRoot)
+            loginPanelRoot.SetActive(true);
+
+        CacheLoginReferences();
+    }
 
     private void Start()
     {
         if (!networkManager)
             networkManager = InstanceFinder.NetworkManager;
 
-        if (startHostButton)
-            startHostButton.onClick.AddListener(StartHost);
+        if (_startHostButton)
+            _startHostButton.onClick.AddListener(StartHost);
 
-        if (startClientButton)
-            startClientButton.onClick.AddListener(StartClient);
+        if (_startClientButton)
+            _startClientButton.onClick.AddListener(StartClient);
 
-        if (nicknameInputField)
-            nicknameInputField.onValueChanged.AddListener(ChangeName);
+        if (_nicknameInputField)
+            _nicknameInputField.onValueChanged.AddListener(ChangeName);
 
         if (networkManager)
             networkManager.ClientManager.OnClientConnectionState += OnClientConnectionState;
@@ -46,10 +57,26 @@ public class ConnectionUI : MonoBehaviour
             networkManager.ClientManager.OnClientConnectionState -= OnClientConnectionState;
     }
 
+    private void CacheLoginReferences()
+    {
+        if (!loginPanelRoot)
+            return;
+
+        foreach (Button button in loginPanelRoot.GetComponentsInChildren<Button>(true))
+        {
+            if (button.name.Contains("Host"))
+                _startHostButton = button;
+            else if (button.name.Contains("Client"))
+                _startClientButton = button;
+        }
+
+        _nicknameInputField = loginPanelRoot.GetComponentInChildren<TMP_InputField>(true);
+    }
+
     private void OnClientConnectionState(ClientConnectionStateArgs args)
     {
         if (args.ConnectionState == LocalConnectionState.Started)
-            HideConnectionUi();
+            HideLoginPanel();
     }
 
     private void StartClient()
@@ -57,8 +84,6 @@ public class ConnectionUI : MonoBehaviour
         SaveNickname();
         if (networkManager)
             networkManager.ClientManager.StartConnection();
-
-        DeactivateButtons();
     }
 
     private void StartHost()
@@ -69,19 +94,9 @@ public class ConnectionUI : MonoBehaviour
 
         networkManager.ServerManager.StartConnection();
         networkManager.ClientManager.StartConnection();
-        DeactivateButtons();
     }
 
-    private void DeactivateButtons()
-    {
-        if (startHostButton)
-            startHostButton.interactable = false;
-
-        if (startClientButton)
-            startClientButton.interactable = false;
-    }
-
-    private void HideConnectionUi()
+    private void HideLoginPanel()
     {
         if (_connectionUiHidden)
             return;
@@ -89,24 +104,18 @@ public class ConnectionUI : MonoBehaviour
         _connectionUiHidden = true;
         HasConnected = true;
 
-        if (hideOnConnect != null)
-        {
-            foreach (GameObject root in hideOnConnect)
-            {
-                if (root)
-                    root.SetActive(false);
-            }
-        }
+        if (loginPanelRoot)
+            loginPanelRoot.SetActive(false);
 
         OnConnected?.Invoke();
     }
 
     private void SaveNickname()
     {
-        if (nicknameInputField)
-            nicknameInputField.DeactivateInputField(true);
+        if (_nicknameInputField)
+            _nicknameInputField.DeactivateInputField(true);
 
-        string rawValue = nicknameInputField != null ? nicknameInputField.text : string.Empty;
+        string rawValue = _nicknameInputField != null ? _nicknameInputField.text : string.Empty;
         if (string.IsNullOrWhiteSpace(rawValue))
             PlayerNickname = "Player";
         else

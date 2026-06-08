@@ -29,10 +29,6 @@ public class PlayerView : NetworkBehaviour
         if (canvasObject)
             canvasObject.SetActive(true);
 
-        ConnectionUI.OnConnected += HideGameplayHud;
-        if (ConnectionUI.HasConnected)
-            HideGameplayHud();
-
         if (!playerShooting)
             return;
 
@@ -45,8 +41,6 @@ public class PlayerView : NetworkBehaviour
 
     public override void OnStopNetwork()
     {
-        ConnectionUI.OnConnected -= HideGameplayHud;
-
         if (playerNetwork)
         {
             playerNetwork.Nickname.OnChange -= OnNicknameChanged;
@@ -57,12 +51,6 @@ public class PlayerView : NetworkBehaviour
             playerShooting.CurrentAmmo.OnChange -= OnBulletsCountChanged;
 
         base.OnStopNetwork();
-    }
-
-    private void HideGameplayHud()
-    {
-        if (canvasObject)
-            canvasObject.SetActive(false);
     }
 
     private void OnNicknameChanged(string oldValue, string newValue, bool asServer)

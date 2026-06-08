@@ -6,13 +6,12 @@ public class GameStateUI : MonoBehaviour
     [SerializeField] private GameManager gameManager;
     [SerializeField] private GameObject waitingRoot;
     [SerializeField] private GameObject resultsRoot;
-    [SerializeField] private GameObject matchTimerRoot;
-    [SerializeField] private GameObject countdownRoot;
     [SerializeField] private TMP_Text waitingText;
-    [SerializeField] private TMP_Text countdownText;
+    [SerializeField] private TMP_Text matchTimerText;
+    [SerializeField] private TMP_Text resultsText;
 
     private bool _bound;
-    private bool _hideLobbyUi;
+    private bool _hasConnected;
 
     private void Start()
     {
@@ -21,6 +20,8 @@ public class GameStateUI : MonoBehaviour
 
         if (!gameManager)
             gameManager = FindFirstObjectByType<GameManager>();
+
+        _hasConnected = ConnectionUI.HasConnected;
 
         ConnectionUI.OnConnected += HandleConnected;
         Bind();
@@ -35,7 +36,7 @@ public class GameStateUI : MonoBehaviour
 
     private void HandleConnected()
     {
-        _hideLobbyUi = true;
+        _hasConnected = true;
         RefreshAll();
     }
 
@@ -47,6 +48,8 @@ public class GameStateUI : MonoBehaviour
         gameManager.CurrentState.OnChange += OnStateChanged;
         gameManager.ConnectedPlayers.OnChange += OnConnectedPlayersChanged;
         gameManager.CountdownTimer.OnChange += OnCountdownChanged;
+        gameManager.RaceElapsedTime.OnChange += OnRaceElapsedChanged;
+        gameManager.ResultsText.OnChange += OnResultsChanged;
         _bound = true;
     }
 
@@ -58,6 +61,8 @@ public class GameStateUI : MonoBehaviour
         gameManager.CurrentState.OnChange -= OnStateChanged;
         gameManager.ConnectedPlayers.OnChange -= OnConnectedPlayersChanged;
         gameManager.CountdownTimer.OnChange -= OnCountdownChanged;
+        gameManager.RaceElapsedTime.OnChange -= OnRaceElapsedChanged;
+        gameManager.ResultsText.OnChange -= OnResultsChanged;
         _bound = false;
     }
 
@@ -76,33 +81,45 @@ public class GameStateUI : MonoBehaviour
         RefreshCountdown();
     }
 
+    private void OnRaceElapsedChanged(float prev, float next, bool asServer)
+    {
+        RefreshRaceTimer();
+    }
+
+    private void OnResultsChanged(string prev, string next, bool asServer)
+    {
+        RefreshResults();
+    }
+
     private void RefreshAll()
     {
         if (!gameManager)
             return;
 
-        bool showLobby = !_hideLobbyUi;
         GameManager.GameState state = gameManager.CurrentState.Value;
+        bool showLobby = _hasConnected && state != GameManager.GameState.Finished;
 
         if (waitingRoot)
             waitingRoot.SetActive(showLobby && state != GameManager.GameState.Countdown);
 
         if (resultsRoot)
-            resultsRoot.SetActive(false);
+            resultsRoot.SetActive(state == GameManager.GameState.Finished);
 
-        if (matchTimerRoot)
-            matchTimerRoot.SetActive(false);
-
-        if (countdownRoot)
-            countdownRoot.SetActive(state == GameManager.GameState.Countdown);
+        if (matchTimerText)
+            matchTimerText.transform.parent.gameObject.SetActive(
+                _hasConnected &&
+                (state == GameManager.GameState.Countdown ||
+                 state == GameManager.GameState.InProgress));
 
         RefreshLobbyText();
         RefreshCountdown();
+        RefreshRaceTimer();
+        RefreshResults();
     }
 
     private void RefreshLobbyText()
     {
-        if (!waitingText || !gameManager || _hideLobbyUi)
+        if (!waitingText || !gameManager || !_hasConnected)
             return;
 
         GameManager.GameState state = gameManager.CurrentState.Value;
@@ -119,16 +136,38 @@ public class GameStateUI : MonoBehaviour
 
     private void RefreshCountdown()
     {
-        if (!countdownText || !gameManager)
+        if (!matchTimerText || !gameManager)
             return;
 
         if (gameManager.CurrentState.Value != GameManager.GameState.Countdown)
+            return;
+
+        int seconds = Mathf.CeilToInt(Mathf.Max(0f, gameManager.CountdownTimer.Value));
+        matchTimerText.text = seconds > 0 ? seconds.ToString() : "Старт!";
+    }
+
+    private void RefreshRaceTimer()
+    {
+        if (!matchTimerText || !gameManager)
+            return;
+
+        if (gameManager.CurrentState.Value != GameManager.GameState.InProgress)
+            return;
+
+        matchTimerText.text = GameManager.FormatRaceTime(gameManager.RaceElapsedTime.Value);
+    }
+
+    private void RefreshResults()
+    {
+        if (!resultsText || !gameManager)
+            return;
+
+        if (gameManager.CurrentState.Value != GameManager.GameState.Finished)
         {
-            countdownText.text = string.Empty;
+            resultsText.text = string.Empty;
             return;
         }
 
-        int seconds = Mathf.CeilToInt(Mathf.Max(0f, gameManager.CountdownTimer.Value));
-        countdownText.text = seconds > 0 ? seconds.ToString() : "Старт!";
+        resultsText.text = gameManager.ResultsText.Value;
     }
 }

@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Collections.Generic;
+using System.Text;
 using FishNet.Connection;
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
@@ -15,6 +17,7 @@ public class GameManager : NetworkBehaviour
 
     [SerializeField] private int requiredPlayers = 2;
     [SerializeField] private float countdownSeconds = 3f;
+    [SerializeField] private float resultsDelaySeconds = 3f;
 
     public int RequiredPlayersForUi => requiredPlayers;
 
@@ -25,15 +28,31 @@ public class GameManager : NetworkBehaviour
 
     public readonly SyncVar<float> CountdownTimer = new(0f, new SyncTypeSettings(0.1f));
 
+    public readonly SyncVar<float> RaceElapsedTime = new(0f, new SyncTypeSettings(0.1f));
+
+    public readonly SyncVar<string> ResultsText = new(string.Empty, new SyncTypeSettings(0.25f));
+
     private Coroutine _countdownCoroutine;
+    private Coroutine _resultsCoroutine;
     private float _recountCooldown;
+    private float _raceStartTime;
+    private readonly HashSet<int> _crossedStartOwnerIds = new();
+    private readonly HashSet<int> _finishedOwnerIds = new();
+    private readonly List<FinishEntry> _finishOrder = new();
+
+    private struct FinishEntry
+    {
+        public int OwnerId;
+        public float TimeSeconds;
+    }
 
     public enum GameState
     {
         WaitingForPlayers,
         WaitingForDrivers,
         Countdown,
-        InProgress
+        InProgress,
+        Finished
     }
 
     public override void OnStartNetwork()
@@ -71,6 +90,12 @@ public class GameManager : NetworkBehaviour
         {
             StopCoroutine(_countdownCoroutine);
             _countdownCoroutine = null;
+        }
+
+        if (_resultsCoroutine != null)
+        {
+            StopCoroutine(_resultsCoroutine);
+            _resultsCoroutine = null;
         }
 
         base.OnStopServer();
@@ -126,6 +151,9 @@ public class GameManager : NetworkBehaviour
                 RecountConnectedPlayers();
             }
         }
+
+        if (CurrentState.Value == GameState.InProgress)
+            RaceElapsedTime.Value = Time.time - _raceStartTime;
     }
 
     public void NotifyDriverStateChanged()
@@ -134,6 +162,44 @@ public class GameManager : NetworkBehaviour
             return;
 
         EvaluateDriverReadiness();
+    }
+
+    public void RegisterStartCross(NetworkVehicle vehicle)
+    {
+        if (!IsServerInitialized || CurrentState.Value != GameState.InProgress)
+            return;
+
+        if (!vehicle || !vehicle.HasDriver)
+            return;
+
+        _crossedStartOwnerIds.Add(vehicle.DriverOwnerId.Value);
+    }
+
+    public void RegisterFinish(NetworkVehicle vehicle)
+    {
+        if (!IsServerInitialized || CurrentState.Value != GameState.InProgress)
+            return;
+
+        if (!vehicle || !vehicle.HasDriver)
+            return;
+
+        int ownerId = vehicle.DriverOwnerId.Value;
+        if (!_crossedStartOwnerIds.Contains(ownerId))
+            return;
+
+        if (_finishedOwnerIds.Contains(ownerId))
+            return;
+
+        float finishTime = Time.time - _raceStartTime;
+        _finishedOwnerIds.Add(ownerId);
+        _finishOrder.Add(new FinishEntry
+        {
+            OwnerId = ownerId,
+            TimeSeconds = finishTime
+        });
+
+        if (_finishOrder.Count == 1)
+            _resultsCoroutine = StartCoroutine(ShowResultsAfterDelay());
     }
 
     private void RecountConnectedPlayers()
@@ -158,7 +224,7 @@ public class GameManager : NetworkBehaviour
 
     private void EvaluateDriverReadiness()
     {
-        if (CurrentState.Value == GameState.InProgress)
+        if (CurrentState.Value == GameState.InProgress || CurrentState.Value == GameState.Finished)
             return;
 
         if (ConnectedPlayers.Value < requiredPlayers)
@@ -226,8 +292,84 @@ public class GameManager : NetworkBehaviour
 
         CountdownTimer.Value = 0f;
         _countdownCoroutine = null;
+        BeginRace();
+    }
+
+    private void BeginRace()
+    {
+        _crossedStartOwnerIds.Clear();
+        _finishedOwnerIds.Clear();
+        _finishOrder.Clear();
+        ResultsText.Value = string.Empty;
+        RaceElapsedTime.Value = 0f;
+        _raceStartTime = Time.time;
         CurrentState.Value = GameState.InProgress;
         RefreshAllVehicleInputs();
+    }
+
+    private IEnumerator ShowResultsAfterDelay()
+    {
+        yield return new WaitForSeconds(resultsDelaySeconds);
+        _resultsCoroutine = null;
+        ResultsText.Value = BuildResultsText();
+        CurrentState.Value = GameState.Finished;
+        RefreshAllVehicleInputs();
+    }
+
+    private string BuildResultsText()
+    {
+        StringBuilder builder = new();
+        builder.AppendLine("Результаты матча");
+        builder.AppendLine();
+
+        for (int i = 0; i < _finishOrder.Count; i++)
+        {
+            FinishEntry entry = _finishOrder[i];
+            builder.AppendLine($"{i + 1}. {GetNicknameForOwner(entry.OwnerId)} — {FormatRaceTime(entry.TimeSeconds)}");
+        }
+
+        HashSet<int> listedOwners = new();
+        foreach (FinishEntry entry in _finishOrder)
+            listedOwners.Add(entry.OwnerId);
+
+        PlayerVehicleInteraction[] racers =
+            FindObjectsByType<PlayerVehicleInteraction>(FindObjectsSortMode.None);
+
+        foreach (PlayerVehicleInteraction racer in racers)
+        {
+            if (listedOwners.Contains(racer.OwnerId))
+                continue;
+
+            int place = _finishOrder.Count + 1;
+            builder.AppendLine($"{place}. {GetNicknameForOwner(racer.OwnerId)} — не финишировал");
+            listedOwners.Add(racer.OwnerId);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string GetNicknameForOwner(int ownerId)
+    {
+        PlayerNetwork[] players = FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None);
+        foreach (PlayerNetwork player in players)
+        {
+            if (player.OwnerId == ownerId)
+                return player.Nickname.Value;
+        }
+
+        return $"Player_{ownerId}";
+    }
+
+    public static string FormatRaceTime(float seconds)
+    {
+        seconds = Mathf.Max(0f, seconds);
+        int minutes = Mathf.FloorToInt(seconds / 60f);
+        float remainingSeconds = seconds % 60f;
+
+        if (minutes > 0)
+            return $"{minutes}:{remainingSeconds:00.0} с";
+
+        return $"{remainingSeconds:0.0} с";
     }
 
     private static void RefreshAllVehicleInputs()
