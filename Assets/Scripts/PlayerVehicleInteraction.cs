@@ -133,6 +133,30 @@ public class PlayerVehicleInteraction : NetworkBehaviour
         OccupiedVehicle.Value = null;
     }
 
+    [Server]
+    public void ForceResetToSpawn(Vector3 spawnPosition)
+    {
+        transform.SetParent(null);
+        transform.position = spawnPosition;
+        OccupiedVehicle.Value = null;
+        ApplyResetStateObserversRpc(spawnPosition);
+    }
+
+    [ObserversRpc]
+    private void ApplyResetStateObserversRpc(Vector3 spawnPosition)
+    {
+        transform.SetParent(null);
+        transform.position = spawnPosition;
+        ApplyInVehicleState(null);
+
+        if (TryGetComponent(out Rigidbody rb))
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.Sleep();
+        }
+    }
+
     private void OnOccupiedVehicleChanged(NetworkObject prev, NetworkObject next, bool asServer)
     {
         ApplyInVehicleState(next);

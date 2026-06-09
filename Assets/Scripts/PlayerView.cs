@@ -12,6 +12,7 @@ public class PlayerView : NetworkBehaviour
     [SerializeField] private TMP_Text bulletsCount;
     [SerializeField] private TMP_Text respawnTimerText;
     [SerializeField] private GameObject canvasObject;
+    [SerializeField] private bool showHealthAndAmmo;
 
     private Coroutine _respawnTimerCoroutine;
 
@@ -21,10 +22,14 @@ public class PlayerView : NetworkBehaviour
         if (!playerNetwork) return;
 
         playerNetwork.Nickname.OnChange += OnNicknameChanged;
-        playerNetwork.Hp.OnChange += OnHpChanged;
 
         OnNicknameChanged(string.Empty, playerNetwork.Nickname.Value, false);
-        OnHpChanged(0, playerNetwork.Hp.Value, false);
+        SetHealthAndAmmoVisible(showHealthAndAmmo);
+        if (showHealthAndAmmo)
+        {
+            playerNetwork.Hp.OnChange += OnHpChanged;
+            OnHpChanged(0, playerNetwork.Hp.Value, false);
+        }
 
         if (!Owner.IsLocalClient) return;
 
@@ -33,7 +38,8 @@ public class PlayerView : NetworkBehaviour
         playerNetwork.IsAlive.OnChange += OnIsAliveChanged;
         OnIsAliveChanged(true, playerNetwork.IsAlive.Value, false);
 
-        if (!playerShooting) return;
+        if (!showHealthAndAmmo || !playerShooting) return;
+
         playerShooting.CurrentAmmo.OnChange += OnBulletsCountChanged;
         int ammoDisplay = playerShooting.CurrentAmmo.Value > 0 ? playerShooting.CurrentAmmo.Value : playerShooting.MaxAmmo;
         OnBulletsCountChanged(0, ammoDisplay, false);
@@ -44,11 +50,12 @@ public class PlayerView : NetworkBehaviour
         if (playerNetwork)
         {
             playerNetwork.Nickname.OnChange -= OnNicknameChanged;
-            playerNetwork.Hp.OnChange -= OnHpChanged;
+            if (showHealthAndAmmo)
+                playerNetwork.Hp.OnChange -= OnHpChanged;
             playerNetwork.IsAlive.OnChange -= OnIsAliveChanged;
         }
 
-        if (playerShooting)
+        if (showHealthAndAmmo && playerShooting)
             playerShooting.CurrentAmmo.OnChange -= OnBulletsCountChanged;
 
         base.OnStopNetwork();
@@ -67,6 +74,12 @@ public class PlayerView : NetworkBehaviour
     private void OnBulletsCountChanged(int oldValue, int newValue, bool asServer)
     {
         if (bulletsCount) bulletsCount.text = $"Bullets: {newValue}";
+    }
+
+    private void SetHealthAndAmmoVisible(bool visible)
+    {
+        if (hpText) hpText.gameObject.SetActive(visible);
+        if (bulletsCount) bulletsCount.gameObject.SetActive(visible);
     }
 
     private void OnIsAliveChanged(bool oldValue, bool newValue, bool asServer)

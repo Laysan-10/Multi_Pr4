@@ -58,6 +58,8 @@ public class PlayerMovement : TickNetworkBehaviour
             return;
         if (!_playerNetwork || !_playerNetwork.IsAlive.Value)
             return;
+        if (!GameManager.CanPlayerMove)
+            return;
 
         var multiplier = speed * Time.deltaTime;
         if (Keyboard.current == null) return;
@@ -90,6 +92,7 @@ public class PlayerMovement : TickNetworkBehaviour
     {
         if (!IsOwner) return default;
         if (!_playerNetwork || !_playerNetwork.IsAlive.Value) return default;
+        if (!GameManager.CanPlayerMove) return default;
 
         if (Keyboard.current == null) return default;
 
@@ -109,6 +112,8 @@ public class PlayerMovement : TickNetworkBehaviour
         Channel channel = Channel.Unreliable)
     {
         if (!_playerNetwork || !_playerNetwork.IsAlive.Value)
+            return;
+        if (!GameManager.CanPlayerMove)
             return;
 
         float delta = (float)TimeManager.TickDelta;

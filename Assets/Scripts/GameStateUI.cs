@@ -1,112 +1,169 @@
-using System.Collections.Generic;
-using System.Text;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class GameStateUI : MonoBehaviour
 {
     [SerializeField] private GameManager gameManager;
     [SerializeField] private GameObject waitingRoot;
     [SerializeField] private GameObject resultsRoot;
-    [SerializeField] private TMP_Text waitingText;
     [SerializeField] private TMP_Text matchTimerText;
     [SerializeField] private TMP_Text resultsText;
+    [SerializeField] private TMP_Text waitingText;
+    [SerializeField] private TMP_Text statusText;
+    [SerializeField] private Color resultsBackgroundColor = new(0f, 0f, 0f, 0.65f);
+    [SerializeField] private Vector2 resultsBackgroundPadding = new(40f, 30f);
 
-    private bool _bound;
+    private bool _hasConnected;
+    private Image _resultsBackground;
 
     private void Start()
     {
         if (!gameManager) gameManager = GameManager.Instance;
+        if (!waitingText) waitingText = FindTmpInChildren(waitingRoot, "Waitingtext");
+        if (!statusText && matchTimerText) statusText = matchTimerText;
+        EnsureResultsBackground();
 
-        if (!gameManager) gameManager = FindFirstObjectByType<GameManager>();
-
+        _hasConnected = ConnectionUI.HasConnected;
+        ConnectionUI.OnConnected += HandleConnected;
         Bind();
         RefreshAll();
     }
 
-    private void OnDestroy()
+    private void Update()
     {
-        Unbind();
+        if (!gameManager || !_hasConnected) return;
+        RefreshTimerText();
+    }
+
+    private void HandleConnected()
+    {
+        _hasConnected = true;
+        RefreshAll();
     }
 
     private void Bind()
     {
-        if (_bound || !gameManager) return;
+        if (!gameManager) return;
 
-        gameManager.CurrentState.OnChange += OnStateChanged;
-        gameManager.ConnectedPlayers.OnChange += OnConnectedPlayersChanged;
-        gameManager.MatchTimer.OnChange += OnMatchTimerChanged;
-        _bound = true;
-    }
-
-    private void Unbind()
-    {
-        if (!_bound || !gameManager) return;
-
-        gameManager.CurrentState.OnChange -= OnStateChanged;
-        gameManager.ConnectedPlayers.OnChange -= OnConnectedPlayersChanged;
-        gameManager.MatchTimer.OnChange -= OnMatchTimerChanged;
-        _bound = false;
-    }
-
-    private void OnStateChanged(GameManager.GameState prev, GameManager.GameState next, bool asServer)
-    {
-        RefreshAll();
-    }
-
-    private void OnConnectedPlayersChanged(int prev, int next, bool asServer)
-    {
-        RefreshWaitingOrTimer();
-    }
-
-    private void OnMatchTimerChanged(float prev, float next, bool asServer)
-    {
-        RefreshWaitingOrTimer();
+        gameManager.CurrentState.OnChange += (_, _, _) => RefreshAll();
+        gameManager.ResultsText.OnChange += (_, value, _) =>
+        {
+            if (resultsText) resultsText.text = value;
+        };
+        gameManager.StatusMessage.OnChange += (_, value, _) => UpdateStatusTexts(value);
+        gameManager.ConnectedPlayers.OnChange += (_, _, _) => RefreshAll();
     }
 
     private void RefreshAll()
     {
-        if (!gameManager) return;
+        if (!gameManager || !_hasConnected) return;
 
         GameManager.GameState state = gameManager.CurrentState.Value;
 
-        if (waitingRoot) waitingRoot.SetActive(state == GameManager.GameState.WaitingForPlayers);
-        if (resultsRoot) resultsRoot.SetActive(state == GameManager.GameState.ShowingResults);
+        if (waitingRoot)
+            waitingRoot.SetActive(state is GameManager.GameState.WaitingForPlayers
+                or GameManager.GameState.Lobby or GameManager.GameState.Countdown);
 
-        RefreshWaitingOrTimer();
+        if (resultsRoot)
+            resultsRoot.SetActive(state == GameManager.GameState.ShowingResults);
 
-        if (state == GameManager.GameState.ShowingResults) RefreshResultsText();
-    }
-
-    private void RefreshWaitingOrTimer()
-    {
-        if (!gameManager)
-            return;
-
-        if (waitingText)
-        {
-            waitingText.text = $"Ожидание игроков: {gameManager.ConnectedPlayers.Value}/{gameManager.RequiredPlayersForUi}";
-        }
+        if (_resultsBackground)
+            _resultsBackground.gameObject.SetActive(state == GameManager.GameState.ShowingResults);
 
         if (matchTimerText)
+            matchTimerText.gameObject.SetActive(state is GameManager.GameState.Countdown
+                or GameManager.GameState.InProgress
+                or GameManager.GameState.ShowingResults);
+
+        if (resultsText)
+            resultsText.text = gameManager.ResultsText.Value;
+
+        UpdateStatusTexts(gameManager.StatusMessage.Value);
+        RefreshTimerText();
+    }
+
+    private void RefreshTimerText()
+    {
+        if (!matchTimerText || !gameManager) return;
+
+        GameManager.GameState state = gameManager.CurrentState.Value;
+
+        if (state == GameManager.GameState.Countdown)
         {
-            bool show = gameManager.CurrentState.Value == GameManager.GameState.InProgress;
-            matchTimerText.gameObject.SetActive(show);
-            if (show) matchTimerText.text = $"Матч: {Mathf.Max(0f, gameManager.MatchTimer.Value):F1} с";
+            float seconds = Mathf.CeilToInt(gameManager.CountdownRemaining.Value);
+            matchTimerText.text = seconds > 0 ? $"\u0421\u0442\u0430\u0440\u0442: {seconds}" : "\u0421\u0442\u0430\u0440\u0442!";
+            return;
+        }
+
+        if (state == GameManager.GameState.InProgress)
+        {
+            if (gameManager.FinishCountdownRemaining.Value > 0f)
+            {
+                float seconds = Mathf.CeilToInt(gameManager.FinishCountdownRemaining.Value);
+                matchTimerText.text = $"\u0418\u0442\u043e\u0433\u0438 \u0447\u0435\u0440\u0435\u0437: {seconds}";
+            }
+            else
+            {
+                matchTimerText.text = GameManager.FormatRaceTime(gameManager.RaceElapsedTime.Value);
+            }
+            return;
+        }
+
+        if (state == GameManager.GameState.ShowingResults)
+        {
+            matchTimerText.text = "\u0418\u0442\u043e\u0433\u0438";
         }
     }
 
-    private void RefreshResultsText()
+    private void UpdateStatusTexts(string message)
     {
-        if (!resultsText) return;
-
-        var list = new List<PlayerNetwork>(FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None));
-        list.Sort((a, b) => b.Score.Value.CompareTo(a.Score.Value));
-
-        var sb = new StringBuilder();
-        sb.AppendLine("Результаты");
-        foreach (PlayerNetwork pn in list) sb.AppendLine($"{pn.Nickname.Value}: {pn.Score.Value} попаданий");
-
-        resultsText.text = sb.ToString();
+        if (waitingText) waitingText.text = message;
+        if (statusText && gameManager)
+        {
+            GameManager.GameState state = gameManager.CurrentState.Value;
+            if (state is GameManager.GameState.WaitingForPlayers
+                or GameManager.GameState.Lobby
+                or GameManager.GameState.Countdown)
+                statusText.text = message;
+        }
     }
+
+    private static TMP_Text FindTmpInChildren(GameObject root, string childName)
+    {
+        if (!root) return null;
+        Transform child = root.transform.Find(childName);
+        return child ? child.GetComponent<TMP_Text>() : null;
+    }
+
+    private void EnsureResultsBackground()
+    {
+        if (!resultsRoot || !resultsText) return;
+
+        Transform existing = resultsRoot.transform.Find("ResultsBackground");
+        GameObject backgroundObject = existing
+            ? existing.gameObject
+            : new GameObject("ResultsBackground", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+
+        backgroundObject.transform.SetParent(resultsRoot.transform, false);
+        backgroundObject.transform.SetAsFirstSibling();
+
+        _resultsBackground = backgroundObject.GetComponent<Image>();
+        _resultsBackground.color = resultsBackgroundColor;
+        _resultsBackground.raycastTarget = false;
+
+        RectTransform backgroundRect = backgroundObject.GetComponent<RectTransform>();
+        RectTransform textRect = resultsText.GetComponent<RectTransform>();
+
+        backgroundRect.anchorMin = textRect.anchorMin;
+        backgroundRect.anchorMax = textRect.anchorMax;
+        backgroundRect.pivot = textRect.pivot;
+        backgroundRect.anchoredPosition = textRect.anchoredPosition;
+        backgroundRect.sizeDelta = textRect.sizeDelta + resultsBackgroundPadding;
+
+        resultsText.transform.SetAsLastSibling();
+        backgroundObject.SetActive(false);
+    }
+
+    private void OnDestroy() => ConnectionUI.OnConnected -= HandleConnected;
 }

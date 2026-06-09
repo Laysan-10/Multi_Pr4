@@ -1,196 +1,286 @@
 using System.Collections;
-using FishNet.Connection;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
-using FishNet.Transporting;
 using UnityEngine;
-using UnityEngine.Serialization;
 
-[RequireComponent(typeof(NetworkObject))]
 public class GameManager : NetworkBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    public static bool IsMatchInProgress =>
-        !Instance || Instance.CurrentState.Value == GameState.InProgress;
-
-    [SerializeField] private int requiredPlayers = 2;
-    [SerializeField] private float matchDurationSeconds = 60f;
-    [SerializeField] private float resultsScreenSeconds = 5f;
-
-    public int RequiredPlayersForUi => requiredPlayers;
-
-    public readonly SyncVar<GameState> CurrentState =
-        new(GameState.WaitingForPlayers, new SyncTypeSettings(0.5f));
-
-    public readonly SyncVar<int> ConnectedPlayers = new(0, new SyncTypeSettings(0.25f));
-
-    public readonly SyncVar<float> MatchTimer = new(60f, new SyncTypeSettings(0.25f));
-
-    private Coroutine _resetLobbyCoroutine;
-    private float _recountCooldown;
-
     public enum GameState
     {
         WaitingForPlayers,
+        Lobby,
+        Countdown,
         InProgress,
         ShowingResults
     }
 
-    public override void OnStartNetwork()
+    public static bool IsMatchInProgress =>
+        Instance != null && Instance.CurrentState.Value == GameState.InProgress;
+
+    public static bool CanPlayerMove =>
+        Instance != null && Instance.CurrentState.Value is GameState.Lobby
+            or GameState.Countdown or GameState.InProgress;
+
+    public static bool CanDriveVehicle =>
+        Instance != null && Instance.CurrentState.Value == GameState.InProgress;
+
+    [SerializeField] private int requiredPlayers = 2;
+    [SerializeField] private float countdownSeconds = 3f;
+    [SerializeField] private float finishDelaySeconds = 3f;
+    [SerializeField] private float resultsScreenSeconds = 5f;
+
+    public int RequiredPlayersForUi => requiredPlayers;
+
+    public readonly SyncVar<GameState> CurrentState = new(GameState.WaitingForPlayers);
+    public readonly SyncVar<int> ConnectedPlayers = new(0);
+    public readonly SyncVar<float> CountdownRemaining = new(0f);
+    public readonly SyncVar<float> RaceElapsedTime = new(0f);
+    public readonly SyncVar<float> FinishCountdownRemaining = new(0f);
+    public readonly SyncVar<string> ResultsText = new("");
+    public readonly SyncVar<string> StatusMessage = new("");
+
+    private readonly Dictionary<NetworkVehicle, float> _raceStartTimes = new();
+    private readonly List<FinishData> _finishers = new();
+    private readonly HashSet<NetworkVehicle> _finishedVehicles = new();
+
+    private Coroutine _countdownCoroutine;
+    private Coroutine _finishDelayCoroutine;
+    private Coroutine _resetCoroutine;
+    private float _raceStartServerTime;
+
+    private struct FinishData
     {
-        base.OnStartNetwork();
-        Instance = this;
+        public string Name;
+        public float TimeTaken;
     }
 
-    public override void OnStopNetwork()
-    {
-        if (Instance == this) Instance = null;
-
-        base.OnStopNetwork();
-    }
+    public override void OnStartNetwork() => Instance = this;
 
     public override void OnStartServer()
     {
-        base.OnStartServer();
-        ServerManager.OnRemoteConnectionState += OnRemoteConnectionState;
-        ServerManager.OnAuthenticationResult += OnAuthenticationResult;
-        NetworkManager.ClientManager.OnClientConnectionState += OnLocalClientConnectionState;
-
-        RecountConnectedPlayers();
-        TryStartMatchIfReady();
-    }
-
-    public override void OnStopServer()
-    {
-        ServerManager.OnRemoteConnectionState -= OnRemoteConnectionState;
-        ServerManager.OnAuthenticationResult -= OnAuthenticationResult;
-        NetworkManager.ClientManager.OnClientConnectionState -= OnLocalClientConnectionState;
-
-        if (_resetLobbyCoroutine != null)
-        {
-            StopCoroutine(_resetLobbyCoroutine);
-            _resetLobbyCoroutine = null;
-        }
-
-        base.OnStopServer();
-    }
-
-    private void OnDestroy()
-    {
-        if (Instance == this) Instance = null;
-    }
-
-    private void OnRemoteConnectionState(NetworkConnection conn, RemoteConnectionStateArgs args)
-    {
-        if (!IsServerInitialized) return;
-
-        RecountConnectedPlayers();
-        TryStartMatchIfReady();
-    }
-
-    private void OnLocalClientConnectionState(ClientConnectionStateArgs args)
-    {
-        if (!IsServerInitialized) return;
-
-        RecountConnectedPlayers();
-        TryStartMatchIfReady();
-    }
-
-    private void OnAuthenticationResult(NetworkConnection conn, bool authenticated)
-    {
-        if (!IsServerInitialized) return;
-
-        RecountConnectedPlayers();
-        TryStartMatchIfReady();
-    }
-
-    private void RecountConnectedPlayers()
-    {
-        int count = ServerManager.Clients.Count;
-        if (NetworkManager.IsHostStarted) count++;
-
-        ConnectedPlayers.Value = count;
-    }
-
-    private void TryStartMatchIfReady()
-    {
-        if (CurrentState.Value != GameState.WaitingForPlayers) return;
-
-        if (ConnectedPlayers.Value < requiredPlayers) return;
-
-        StartMatch();
-    }
-
-    private void StartMatch()
-    {
-        MatchTimer.Value = matchDurationSeconds;
-        CurrentState.Value = GameState.InProgress;
+        ServerManager.OnRemoteConnectionState += (_, _) => { Recount(); UpdateLobbyState(); };
+        NetworkManager.ClientManager.OnClientConnectionState += (_) => { Recount(); UpdateLobbyState(); };
+        Recount();
+        UpdateLobbyState();
     }
 
     private void Update()
     {
-        if (!IsServerInitialized) return;
+        if (!IsServerStarted) return;
+        if (CurrentState.Value != GameState.InProgress) return;
 
-        if (CurrentState.Value == GameState.WaitingForPlayers)
+        RaceElapsedTime.Value = Time.time - _raceStartServerTime;
+    }
+
+    private void Recount() =>
+        ConnectedPlayers.Value = ServerManager.Clients.Count + (NetworkManager.IsHostStarted ? 1 : 0);
+
+    private void UpdateLobbyState()
+    {
+        if (CurrentState.Value is GameState.ShowingResults or GameState.Countdown or GameState.InProgress)
+            return;
+
+        if (ConnectedPlayers.Value >= requiredPlayers)
         {
-            _recountCooldown -= Time.unscaledDeltaTime;
-            if (_recountCooldown <= 0f)
+            if (CurrentState.Value != GameState.Lobby)
             {
-                _recountCooldown = 0.25f;
-                RecountConnectedPlayers();
+                CurrentState.Value = GameState.Lobby;
+                StatusMessage.Value = "\u0421\u0430\u0434\u0438\u0442\u0435\u0441\u044c \u0432 \u043c\u0430\u0448\u0438\u043d\u044b (E)";
             }
         }
-
-        if (CurrentState.Value != GameState.InProgress) return;
-
-        MatchTimer.Value -= Time.deltaTime;
-
-        if (MatchTimer.Value <= 0f) EndMatch();
-    }
-
-    private void EndMatch()
-    {
-        if (CurrentState.Value != GameState.InProgress) return;
-
-        CurrentState.Value = GameState.ShowingResults;
-
-        if (_resetLobbyCoroutine != null) StopCoroutine(_resetLobbyCoroutine);
-
-        _resetLobbyCoroutine = StartCoroutine(ResetToLobbyAfterDelay());
-    }
-
-    private IEnumerator ResetToLobbyAfterDelay()
-    {
-        yield return new WaitForSeconds(resultsScreenSeconds);
-        _resetLobbyCoroutine = null;
-        ResetToLobby();
-    }
-
-    private void ResetToLobby()
-    {
-        foreach (NetworkConnection conn in ServerManager.Clients.Values) ResetPlayersForConnection(conn);
-
-        if (NetworkManager.IsHostStarted && NetworkManager.ClientManager.Connection.IsValid) ResetPlayersForConnection(NetworkManager.ClientManager.Connection);
-
-        MatchTimer.Value = matchDurationSeconds;
-        CurrentState.Value = GameState.WaitingForPlayers;
-
-        TryStartMatchIfReady();
-    }
-
-    private static void ResetPlayersForConnection(NetworkConnection conn)
-    {
-        foreach (NetworkObject nob in conn.Objects)
+        else
         {
-            if (!nob.TryGetComponent(out PlayerNetwork pn)) continue;
-
-            pn.Hp.Value = 100;
-            pn.IsAlive.Value = true;
-            pn.Score.Value = 0;
-            pn.RespawnPlayer();
-
-            if (nob.TryGetComponent(out PlayerShooting shooting)) shooting.CurrentAmmo.Value = shooting.MaxAmmo;
+            CurrentState.Value = GameState.WaitingForPlayers;
+            StatusMessage.Value = $"\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435 \u0438\u0433\u0440\u043e\u043a\u043e\u0432: {ConnectedPlayers.Value}/{requiredPlayers}";
         }
     }
+
+    [Server]
+    public void OnVehicleDriverChanged()
+    {
+        if (CurrentState.Value == GameState.Lobby)
+            TryBeginCountdown();
+        else if (CurrentState.Value == GameState.Countdown && !AllRequiredPlayersInCars())
+            CancelCountdown();
+    }
+
+    [Server]
+    private void TryBeginCountdown()
+    {
+        if (!AllRequiredPlayersInCars()) return;
+        if (_countdownCoroutine != null) return;
+
+        _countdownCoroutine = StartCoroutine(CountdownRoutine());
+    }
+
+    [Server]
+    private void CancelCountdown()
+    {
+        if (_countdownCoroutine == null) return;
+
+        StopCoroutine(_countdownCoroutine);
+        _countdownCoroutine = null;
+        CountdownRemaining.Value = 0f;
+        CurrentState.Value = GameState.Lobby;
+        StatusMessage.Value = "\u0421\u0430\u0434\u0438\u0442\u0435\u0441\u044c \u0432 \u043c\u0430\u0448\u0438\u043d\u044b (E)";
+    }
+
+    [Server]
+    private IEnumerator CountdownRoutine()
+    {
+        CurrentState.Value = GameState.Countdown;
+        float remaining = countdownSeconds;
+
+        while (remaining > 0f)
+        {
+            if (!AllRequiredPlayersInCars())
+            {
+                _countdownCoroutine = null;
+                CancelCountdown();
+                yield break;
+            }
+
+            CountdownRemaining.Value = remaining;
+            StatusMessage.Value = $"\u0421\u0442\u0430\u0440\u0442 \u0447\u0435\u0440\u0435\u0437 {Mathf.CeilToInt(remaining)}...";
+            yield return new WaitForSeconds(1f);
+            remaining -= 1f;
+        }
+
+        CountdownRemaining.Value = 0f;
+        _countdownCoroutine = null;
+        StartRace();
+    }
+
+    [Server]
+    private void StartRace()
+    {
+        _raceStartTimes.Clear();
+        _finishers.Clear();
+        _finishedVehicles.Clear();
+        FinishCountdownRemaining.Value = 0f;
+        _raceStartServerTime = Time.time;
+        RaceElapsedTime.Value = 0f;
+        CurrentState.Value = GameState.InProgress;
+        StatusMessage.Value = "\u0413\u043e\u043d\u043a\u0430!";
+
+        foreach (NetworkVehicle vehicle in FindObjectsByType<NetworkVehicle>(FindObjectsSortMode.None))
+        {
+            if (!vehicle.HasDriver) continue;
+            _raceStartTimes[vehicle] = _raceStartServerTime;
+        }
+    }
+
+    [Server]
+    public void RegisterFinish(NetworkVehicle vehicle)
+    {
+        if (CurrentState.Value != GameState.InProgress) return;
+        if (!vehicle || !vehicle.HasDriver) return;
+        if (_finishedVehicles.Contains(vehicle)) return;
+        if (!_raceStartTimes.TryGetValue(vehicle, out float startTime)) return;
+
+        _finishedVehicles.Add(vehicle);
+        _finishers.Add(new FinishData
+        {
+            Name = GetDriverName(vehicle),
+            TimeTaken = Time.time - startTime
+        });
+
+        if (_finishDelayCoroutine == null)
+            _finishDelayCoroutine = StartCoroutine(FinishDelayRoutine());
+    }
+
+    [Server]
+    private IEnumerator FinishDelayRoutine()
+    {
+        float remaining = finishDelaySeconds;
+        while (remaining > 0f)
+        {
+            FinishCountdownRemaining.Value = remaining;
+            StatusMessage.Value = $"\u0418\u0442\u043e\u0433\u0438 \u0447\u0435\u0440\u0435\u0437 {Mathf.CeilToInt(remaining)}...";
+            yield return new WaitForSeconds(1f);
+            remaining -= 1f;
+        }
+
+        FinishCountdownRemaining.Value = 0f;
+        _finishDelayCoroutine = null;
+        EndMatch();
+    }
+
+    [Server]
+    private void EndMatch()
+    {
+        CurrentState.Value = GameState.ShowingResults;
+
+        var sorted = _finishers.OrderBy(f => f.TimeTaken).ToList();
+        StringBuilder sb = new StringBuilder("\u0418\u0422\u041e\u0413\u0418 \u0413\u041e\u041d\u041A\u0418:\n\n");
+        for (int i = 0; i < sorted.Count; i++)
+            sb.AppendLine($"{i + 1}. {sorted[i].Name} - {sorted[i].TimeTaken:F2} \u0441\u0435\u043a");
+
+        if (sorted.Count == 0)
+            sb.AppendLine("\u041d\u0438\u043a\u0442\u043e \u043d\u0435 \u0444\u0438\u043d\u0438\u0448\u0438\u0440\u043e\u0432\u0430\u043b");
+
+        ResultsText.Value = sb.ToString();
+        StatusMessage.Value = "\u0413\u043e\u043d\u043a\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430";
+
+        if (_resetCoroutine != null)
+            StopCoroutine(_resetCoroutine);
+        _resetCoroutine = StartCoroutine(ResetAfterResultsRoutine());
+    }
+
+    [Server]
+    private IEnumerator ResetAfterResultsRoutine()
+    {
+        yield return new WaitForSeconds(resultsScreenSeconds);
+
+        RaceResetManager resetManager = RaceResetManager.Instance;
+        if (resetManager)
+            resetManager.ResetRace();
+
+        _raceStartTimes.Clear();
+        _finishers.Clear();
+        _finishedVehicles.Clear();
+        ResultsText.Value = "";
+        RaceElapsedTime.Value = 0f;
+        FinishCountdownRemaining.Value = 0f;
+        CountdownRemaining.Value = 0f;
+        _resetCoroutine = null;
+
+        CurrentState.Value = ConnectedPlayers.Value >= requiredPlayers
+            ? GameState.Lobby
+            : GameState.WaitingForPlayers;
+        UpdateLobbyState();
+        if (CurrentState.Value == GameState.Lobby)
+            StatusMessage.Value = "\u0421\u0430\u0434\u0438\u0442\u0435\u0441\u044c \u0432 \u043c\u0430\u0448\u0438\u043d\u044b (E)";
+    }
+
+    [Server]
+    private bool AllRequiredPlayersInCars()
+    {
+        NetworkVehicle[] vehicles = FindObjectsByType<NetworkVehicle>(FindObjectsSortMode.None);
+        int drivers = vehicles.Count(v => v.HasDriver);
+        return drivers >= requiredPlayers;
+    }
+
+    [Server]
+    private string GetDriverName(NetworkVehicle vehicle)
+    {
+        if (!vehicle.HasDriver)
+            return "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e";
+
+        foreach (PlayerNetwork player in FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None))
+        {
+            if (player.OwnerId == vehicle.DriverOwnerId.Value)
+                return player.Nickname.Value;
+        }
+
+        return $"\u0418\u0433\u0440\u043e\u043a {vehicle.DriverOwnerId.Value}";
+    }
+
+    public static string FormatRaceTime(float time) =>
+        string.Format("{0:00}:{1:00.00}", (int)time / 60, time % 60);
 }
